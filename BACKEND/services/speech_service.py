@@ -33,7 +33,7 @@ class SpeechService:
         self.current_pdf = None
         
         # Initialize Hugging Face API
-        self.hf_api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+        self.hf_api_url = "https://api-inference.huggingface.co/models/distil-whisper/distil-large-v3"
         self.hf_token = Config.HF_API_TOKEN
         self.hf_headers = {"Authorization": f"Bearer {self.hf_token}"} if self.hf_token else {}
         

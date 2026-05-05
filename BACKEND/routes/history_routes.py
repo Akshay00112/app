@@ -1,6 +1,7 @@
 # backend/routes/history_routes.py
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
+from bson import ObjectId
 from models.pdf_history import PdfHistory
 from routes.auth_middleware import jwt_required_custom
 
