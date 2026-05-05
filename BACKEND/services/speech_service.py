@@ -526,6 +526,7 @@ class SpeechService:
                     with open(temp_wav, "rb") as f:
                         audio_payload = f.read()
                     
+                    print(f"[TRANSCRIBE] Calling HF API: {self.hf_api_url}")
                     response = requests.post(
                         self.hf_api_url, 
                         headers=self.hf_headers, 
