@@ -13,7 +13,7 @@ class Config:
     # Performance optimizations
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024
     SPEECH_RATE = 80
-    SIMILARITY_THRESHOLD = 0.65
+    SIMILARITY_THRESHOLD = 0.55
     JSON_SORT_KEYS = False
     PROPAGATE_EXCEPTIONS = True
     HF_API_TOKEN = os.getenv('HF_API_TOKEN')

@@ -352,7 +352,7 @@ def evaluate_pronunciation():
         
         print(f"[EVAL] Similarity: {similarity}")
         
-        is_correct = similarity >= 0.6
+        is_correct = similarity >= Config.SIMILARITY_THRESHOLD
         
         # Generate feedback with word-level details
         base_feedback = f"✨ Great job! Score: {int(similarity*100)}%" if is_correct else f"Let's try again! Score: {int(similarity*100)}%"
