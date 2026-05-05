@@ -12,7 +12,7 @@ class Config:
     
     # Performance optimizations
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024
-    SPEECH_RATE = 80
+    SPEECH_RATE = 60
     SIMILARITY_THRESHOLD = 0.55
     JSON_SORT_KEYS = False
     PROPAGATE_EXCEPTIONS = True
