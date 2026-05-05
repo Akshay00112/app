@@ -34,7 +34,13 @@ class SpeechService:
         
         # Initialize Hugging Face API
         self.hf_api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
-        self.hf_headers = {"Authorization": f"Bearer {Config.HF_API_TOKEN}"} if Config.HF_API_TOKEN else {}
+        self.hf_token = Config.HF_API_TOKEN
+        self.hf_headers = {"Authorization": f"Bearer {self.hf_token}"} if self.hf_token else {}
+        
+        if self.hf_token:
+            print(f"[INIT] Hugging Face Whisper API configured (Token starts with: {self.hf_token[:8]}...)")
+        else:
+            print("[INIT] Warning: HF_API_TOKEN not found. Falling back to Google.")
     
     def _init_tts(self):
         """Initialize text-to-speech engine"""
@@ -512,26 +518,44 @@ class SpeechService:
             audio_segment.export(temp_wav, format="wav")
             
             # 2. Try Hugging Face Whisper API
-            if Config.HF_API_TOKEN:
+            if self.hf_token:
                 try:
-                    print("[TRANSCRIBE] Attempting Hugging Face Whisper API...")
+                    print(f"[TRANSCRIBE] Sending {len(raw_data)} bytes to Hugging Face Whisper API...")
+                    
+                    # We use the raw_data (original bytes) or the normalized temp_wav
                     with open(temp_wav, "rb") as f:
-                        data = f.read()
+                        audio_payload = f.read()
                     
                     response = requests.post(
                         self.hf_api_url, 
                         headers=self.hf_headers, 
-                        data=data,
+                        data=audio_payload,
                         timeout=30
                     )
                     
                     if response.status_code == 200:
                         result = response.json()
                         transcription = result.get("text", "")
+                        if not transcription and isinstance(result, list) and len(result) > 0:
+                            transcription = result[0].get("text", "")
+                            
                         print(f"[TRANSCRIBE] HF Success: '{transcription}'")
-                        return transcription.lower().strip()
-                    else:
-                        print(f"[TRANSCRIBE] HF API Error {response.status_code}: {response.text}")
+                        if transcription:
+                            return transcription.lower().strip()
+                        else:
+                            print("[TRANSCRIBE] HF returned empty result.")
+                    elif response.status_code == 503:
+                        # Model is loading
+                        print("[TRANSCRIBE] HF Model is loading (503). Retrying once in 5 seconds...")
+                        time.sleep(5)
+                        # One-time retry
+                        response = requests.post(self.hf_api_url, headers=self.hf_headers, data=audio_payload, timeout=30)
+                        if response.status_code == 200:
+                            transcription = response.json().get("text", "")
+                            print(f"[TRANSCRIBE] HF Retry Success: '{transcription}'")
+                            return transcription.lower().strip()
+                    
+                    print(f"[TRANSCRIBE] HF API Error {response.status_code}: {response.text}")
                 except Exception as hf_err:
                     print(f"[TRANSCRIBE] HF failed: {hf_err}. Falling back to Google...")
             
