@@ -15,22 +15,29 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.akshay.dyslexiaassistant",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "experiments": {
-      "newArchEnabled": false
-    },
     "plugins": [
       "expo-audio",
-      "expo-video"
-    ]
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "da2c72d4-4757-4b6b-b09f-f367d102a58c"
+      }
+    }
   }
 }

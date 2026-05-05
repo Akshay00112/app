@@ -7,10 +7,11 @@ import re
 import PyPDF2
 import io
 import uuid
-import whisper
-import tempfile
 import os
+import requests
 from config import Config
+from pydub import AudioSegment
+
 # ==========================================
 # 0. TTS & SPEECH UTILS
 # ==========================================
@@ -30,7 +31,10 @@ class SpeechService:
         self.total_practiced = 0
         self.is_reading = False
         self.current_pdf = None
-        self.whisper_model = self._init_whisper()
+        
+        # Initialize Hugging Face API
+        self.hf_api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+        self.hf_headers = {"Authorization": f"Bearer {Config.HF_API_TOKEN}"} if Config.HF_API_TOKEN else {}
     
     def _init_tts(self):
         """Initialize text-to-speech engine"""
@@ -56,17 +60,6 @@ class SpeechService:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.pause_threshold = 1.5
         self.recognizer.energy_threshold = 300
-    
-    def _init_whisper(self):
-        """Initialize Whisper model for speech recognition"""
-        try:
-            print("[WHISPER] Loading Whisper model (tiny)...")
-            model = whisper.load_model("tiny")
-            print("[WHISPER] Model loaded successfully")
-            return model
-        except Exception as e:
-            print(f"[WHISPER] Failed to load model: {e}")
-            return None
 
     # ==========================================
     # 2. PDF TEXT EXTRACTION
@@ -462,15 +455,10 @@ class SpeechService:
         if not text:
             return None
             
-        import tempfile
-        import os
-        
         try:
             temp_dir = tempfile.gettempdir()
             filename = os.path.join(temp_dir, f"tts_{uuid.uuid4()}.wav")
             
-            # Use a separate engine instance if possible to avoid state issues in multi-threaded env
-            # But pyttsx3 is often finicky with multiple instances.
             self.engine.save_to_file(text, filename)
             self.engine.runAndWait()
             
@@ -502,58 +490,79 @@ class SpeechService:
             raise RuntimeError(f"Microphone error: {e}")
     
     def transcribe(self, audio):
-        """Convert speech to text using Whisper model"""
+        """Convert speech to text using Hugging Face Whisper with Google fallback"""
+        temp_wav = None
         try:
-            if self.whisper_model is None:
-                print("[TRANSCRIBE] Whisper model not loaded, falling back to Google Speech Recognition")
-                return self._transcribe_google(audio)
+            # 1. Pre-process audio (Normalize and Convert)
+            print("[TRANSCRIBE] Pre-processing audio...")
             
-            # Save audio to temporary file for Whisper processing
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                temp_path = temp_audio.name
-                audio.get_wav_data()
-                temp_audio.write(audio.get_wav_data())
+            # Get raw audio data
+            raw_data = audio.get_wav_data()
+            audio_io = io.BytesIO(raw_data)
             
-            try:
-                print("[TRANSCRIBE] Attempting Whisper speech recognition...")
-                result = self.whisper_model.transcribe(temp_path, language="en")
-                text = result.get("text", "").strip()
-                print(f"[TRANSCRIBE] Whisper Success: '{text}'")
-                return text.lower()
-            finally:
-                # Clean up temporary file
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-        
-        except Exception as e:
-            print(f"[TRANSCRIBE] Whisper error: {type(e).__name__}: {e}")
-            print("[TRANSCRIBE] Attempting fallback to Google Speech Recognition...")
-            return self._transcribe_google(audio)
-    
-    def _transcribe_google(self, audio):
-        """Fallback: Convert speech to text using Google Speech Recognition"""
-        try:
-            print("[TRANSCRIBE] Using Google Speech Recognition as fallback...")
+            # Load into pydub for normalization
+            audio_segment = AudioSegment.from_wav(audio_io)
+            
+            # Normalize volume (target -20dBFS)
+            change_in_dbfs = -20.0 - audio_segment.dBFS
+            audio_segment = audio_segment.apply_gain(change_in_dbfs)
+            
+            # Export to a temporary file for Groq
+            temp_wav = f"temp_audio_{uuid.uuid4()}.wav"
+            audio_segment.export(temp_wav, format="wav")
+            
+            # 2. Try Hugging Face Whisper API
+            if Config.HF_API_TOKEN:
+                try:
+                    print("[TRANSCRIBE] Attempting Hugging Face Whisper API...")
+                    with open(temp_wav, "rb") as f:
+                        data = f.read()
+                    
+                    response = requests.post(
+                        self.hf_api_url, 
+                        headers=self.hf_headers, 
+                        data=data,
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        transcription = result.get("text", "")
+                        print(f"[TRANSCRIBE] HF Success: '{transcription}'")
+                        return transcription.lower().strip()
+                    else:
+                        print(f"[TRANSCRIBE] HF API Error {response.status_code}: {response.text}")
+                except Exception as hf_err:
+                    print(f"[TRANSCRIBE] HF failed: {hf_err}. Falling back to Google...")
+            
+            # 3. Fallback to Google Speech Recognition
+            print("[TRANSCRIBE] Attempting Google Speech Recognition...")
             text = self.recognizer.recognize_google(audio)
             print(f"[TRANSCRIBE] Google Success: '{text}'")
-            return text.lower()
-        except sr.UnknownValueError as e:
-            print(f"[TRANSCRIBE] Could not understand audio: {e}")
+            return text.lower().strip()
+            
+        except sr.UnknownValueError:
+            print("[TRANSCRIBE] Could not understand audio")
             return ""
         except sr.RequestError as e:
             print(f"[TRANSCRIBE] API request error: {e}")
-            if "Failed to connect" in str(e) or "connection" in str(e).lower():
-                print("[TRANSCRIBE] Network error detected")
             return ""
         except Exception as e:
-            print(f"[TRANSCRIBE] Unexpected error: {type(e).__name__}: {e}")
+            print(f"[TRANSCRIBE] Unexpected error: {e}")
             return ""
+        finally:
+            # Cleanup temp file
+            if temp_wav and os.path.exists(temp_wav):
+                try:
+                    os.remove(temp_wav)
+                except:
+                    pass
     
     def calculate_similarity(self, original, spoken):
         """Calculate similarity between original and spoken text.
         
-        Only compares actual words - numbers and symbols are excluded.
-        Uses word-level matching for more accurate pronunciation evaluation.
+        Uses a combination of character-level matching and word-level fuzzy matching
+        to handle hesitations and slight mispronunciations.
         """
         if not original or not spoken:
             return 0.0
@@ -561,41 +570,40 @@ class SpeechService:
         original_clean = self._clean_text(original)
         spoken_clean = self._clean_text(spoken)
         
-        # If either is empty after cleaning, return 0
         if not original_clean or not spoken_clean:
             return 0.0
         
-        # Standard character-level ratio
-        ratio = SequenceMatcher(None, original_clean, spoken_clean).ratio()
+        # 1. Base similarity ratio
+        base_ratio = SequenceMatcher(None, original_clean, spoken_clean).ratio()
         
-        # If ratio is low, try phonetic-aware matching for names/complex words
-        if ratio < 0.8:
-            # Check for specific misrecognitions of complex names like "Wollstonecraft"
-            # "old stone craft" -> "wollstonecraft"
-            # We'll use a word-level fuzzy match that's more permissive for similar sounding parts
-            orig_words = original_clean.split()
-            spoken_words = spoken_clean.split()
+        # 2. Word-level alignment scoring (more robust for reading)
+        orig_words = original_clean.split()
+        spoken_words = spoken_clean.split()
+        
+        if len(orig_words) == 0:
+            return 0.0
             
-            if len(orig_words) > 0:
-                matched_words = 0
-                for ow in orig_words:
-                    # Check if word is contained in spoken string (even spread out)
-                    # or if spoken string contains common mis-hearings
-                    if ow in spoken_clean:
-                        matched_words += 1
-                    elif ow == "wollstonecraft" and ("stone" in spoken_clean and "craft" in spoken_clean):
-                        matched_words += 1
-                    else:
-                        # Try fuzzy word match
-                        for sw in spoken_words:
-                            if SequenceMatcher(None, ow, sw).ratio() > 0.6:
-                                matched_words += 1
-                                break
+        matches = 0
+        for ow in orig_words:
+            # Direct match
+            if ow in spoken_words:
+                matches += 1
+                continue
+            
+            # Fuzzy match for mispronunciation (e.g., "word" vs "ward")
+            best_fuzzy = 0
+            for sw in spoken_words:
+                fuzzy_sim = SequenceMatcher(None, ow, sw).ratio()
+                if fuzzy_sim > 0.8: # High threshold for pronunciation
+                    best_fuzzy = max(best_fuzzy, fuzzy_sim)
+            
+            if best_fuzzy > 0:
+                matches += best_fuzzy
                 
-                fuzzy_ratio = matched_words / len(orig_words)
-                ratio = max(ratio, fuzzy_ratio)
+        word_ratio = matches / len(orig_words)
         
-        return ratio
+        # Return the better of the two scores
+        return max(base_ratio, word_ratio)
 
     def _clean_text(self, text):
         """Remove punctuation, numbers, and symbols. Keep only letters and spaces.

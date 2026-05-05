@@ -14,5 +14,6 @@ dnspython
 certifi
 pydub
 librosa
-openai-whisper
-torch
+gunicorn==21.2.0
+PyMuPDF
+requests

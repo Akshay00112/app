@@ -16,6 +16,7 @@ class Config:
     SIMILARITY_THRESHOLD = 0.65
     JSON_SORT_KEYS = False
     PROPAGATE_EXCEPTIONS = True
+    HF_API_TOKEN = os.getenv('HF_API_TOKEN')
 
 # Create directories
 os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
