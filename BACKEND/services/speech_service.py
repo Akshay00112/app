@@ -7,6 +7,9 @@ import re
 import PyPDF2
 import io
 import uuid
+import whisper
+import tempfile
+import os
 from config import Config
 # ==========================================
 # 0. TTS & SPEECH UTILS
@@ -27,6 +30,7 @@ class SpeechService:
         self.total_practiced = 0
         self.is_reading = False
         self.current_pdf = None
+        self.whisper_model = self._init_whisper()
     
     def _init_tts(self):
         """Initialize text-to-speech engine"""
@@ -52,6 +56,17 @@ class SpeechService:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.pause_threshold = 1.5
         self.recognizer.energy_threshold = 300
+    
+    def _init_whisper(self):
+        """Initialize Whisper model for speech recognition"""
+        try:
+            print("[WHISPER] Loading Whisper model (tiny)...")
+            model = whisper.load_model("tiny")
+            print("[WHISPER] Model loaded successfully")
+            return model
+        except Exception as e:
+            print(f"[WHISPER] Failed to load model: {e}")
+            return None
 
     # ==========================================
     # 2. PDF TEXT EXTRACTION
@@ -487,18 +502,46 @@ class SpeechService:
             raise RuntimeError(f"Microphone error: {e}")
     
     def transcribe(self, audio):
-        """Convert speech to text using Google Speech Recognition"""
+        """Convert speech to text using Whisper model"""
         try:
-            print("[TRANSCRIBE] Attempting Google Speech Recognition...")
+            if self.whisper_model is None:
+                print("[TRANSCRIBE] Whisper model not loaded, falling back to Google Speech Recognition")
+                return self._transcribe_google(audio)
+            
+            # Save audio to temporary file for Whisper processing
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+                temp_path = temp_audio.name
+                audio.get_wav_data()
+                temp_audio.write(audio.get_wav_data())
+            
+            try:
+                print("[TRANSCRIBE] Attempting Whisper speech recognition...")
+                result = self.whisper_model.transcribe(temp_path, language="en")
+                text = result.get("text", "").strip()
+                print(f"[TRANSCRIBE] Whisper Success: '{text}'")
+                return text.lower()
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        except Exception as e:
+            print(f"[TRANSCRIBE] Whisper error: {type(e).__name__}: {e}")
+            print("[TRANSCRIBE] Attempting fallback to Google Speech Recognition...")
+            return self._transcribe_google(audio)
+    
+    def _transcribe_google(self, audio):
+        """Fallback: Convert speech to text using Google Speech Recognition"""
+        try:
+            print("[TRANSCRIBE] Using Google Speech Recognition as fallback...")
             text = self.recognizer.recognize_google(audio)
-            print(f"[TRANSCRIBE] Success: '{text}'")
+            print(f"[TRANSCRIBE] Google Success: '{text}'")
             return text.lower()
         except sr.UnknownValueError as e:
             print(f"[TRANSCRIBE] Could not understand audio: {e}")
             return ""
         except sr.RequestError as e:
             print(f"[TRANSCRIBE] API request error: {e}")
-            # Check if it's a network error
             if "Failed to connect" in str(e) or "connection" in str(e).lower():
                 print("[TRANSCRIBE] Network error detected")
             return ""

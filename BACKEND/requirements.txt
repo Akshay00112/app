@@ -14,3 +14,5 @@ dnspython
 certifi
 pydub
 librosa
+openai-whisper
+torch
